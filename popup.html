@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      width: 240px;
+      padding: 14px;
+      margin: 0;
+      text-align: center;
+      background-color: #f9f9f9;
+    }
+    h3 {
+      font-size: 15px;
+      margin-top: 0;
+      margin-bottom: 12px;
+      color: #333;
+    }
+    button {
+      background: #007acc;
+      color: white;
+      border: none;
+      padding: 10px 14px;
+      width: 100%;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #005999;
+    }
+    #status {
+      margin-top: 10px;
+      font-size: 11px;
+      color: #666;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <h3>Gerador de Documentação</h3>
+  <button id="exportBtn">Exportar para .ZIP</button>
+  <div id="status"></div>
+
+  <!-- Bibliotecas externas na pasta /lib -->
+  <script src="lib/turndown.js"></script>
+  <script src="lib/jszip.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

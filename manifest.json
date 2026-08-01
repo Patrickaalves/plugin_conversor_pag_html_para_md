@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Web Doc to Markdown Exporter",
+  "version": "1.0",
+  "description": "Exporta a página atual para Markdown (.md) baixando imagens para uma pasta local.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
