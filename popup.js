@@ -82,6 +82,31 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
       }
     });
 
+    turndownService.addRule('tables', {
+      filter: 'table',
+      replacement: function (content, node) {
+        const rows = Array.from(node.querySelectorAll('tr'));
+        if (rows.length === 0) return '';
+
+        let markdownTable = '\n\n';
+
+        rows.forEach((row, rowIndex) => {
+          const cells = Array.from(row.querySelectorAll('th, td'));
+          const cellTexts = cells.map(cell => cell.textContent.replace(/[\n\r]+/g, ' ').trim());
+
+          markdownTable += '| ' + cellTexts.join(' | ') + ' |\n';
+
+          // Adiciona a linha divisória do cabeçalho Markdown após a primeira linha
+          if (rowIndex === 0) {
+            const separator = cells.map(() => '---').join(' | ');
+            markdownTable += '| ' + separator + ' |\n';
+          }
+        });
+
+        return markdownTable + '\n\n';
+      }
+    });
+
     // Executa a conversão base para Markdown
     let baseMarkdown = turndownService.turndown(htmlContent);
 
@@ -143,11 +168,12 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
 async function translateMarkdownSafely(markdown, targetLang) {
   const placeholders = [];
   
-  const regexesToProtect = [
+const regexesToProtect = [
     /```[\s\S]*?```/g,                        // Blocos de código Markdown
     /<img[^>]+>/g,                            // Tags de imagem HTML
     /<details[^>]*>[\s\S]*?<\/details>/g,     // Blocos HTML details
-    /!\[[^\]]*\]\([^)]+\)/g                   // Imagens Markdown inline
+    /!\[[^\]]*\]\([^)]+\)/g,                  // Imagens Markdown inline
+    /\|[^\n]+\|\n\|[\s:-|-]+\|\n(\|[^\n]+\|\n?)*/g // Tabelas em formato Markdown
   ];
 
   let protectedMarkdown = markdown;
