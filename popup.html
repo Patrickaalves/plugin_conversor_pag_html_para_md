@@ -32,17 +32,52 @@
     button:hover {
       background: #005999;
     }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
     #status {
-      margin-top: 10px;
+      margin-top: 8px;
       font-size: 11px;
       color: #666;
       word-break: break-word;
+    }
+    /* Estilos da Barra de Progresso */
+    #progressContainer {
+      display: none;
+      margin-top: 12px;
+      width: 100%;
+      background-color: #e0e0e0;
+      border-radius: 10px;
+      height: 12px;
+      overflow: hidden;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+    }
+    #progressBar {
+      width: 0%;
+      height: 100%;
+      background-color: #007acc;
+      transition: width 0.2s ease-in-out;
+      border-radius: 10px;
+    }
+    #progressText {
+      display: none;
+      font-size: 10px;
+      font-weight: bold;
+      color: #444;
+      margin-top: 4px;
     }
   </style>
 </head>
 <body>
   <h3>Gerador de Documentação</h3>
   <button id="exportBtn">Exportar para .ZIP</button>
+  
+  <div id="progressContainer">
+    <div id="progressBar"></div>
+  </div>
+  <div id="progressText">0%</div>
+
   <div id="status"></div>
 
   <!-- Bibliotecas externas na pasta /lib -->

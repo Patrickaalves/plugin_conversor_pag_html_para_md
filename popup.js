@@ -1,28 +1,31 @@
 document.getElementById('exportBtn').addEventListener('click', async () => {
+  const exportBtn = document.getElementById('exportBtn');
   const status = document.getElementById('status');
-  status.innerText = 'Extraindo e tratando conteúdo...';
+  
+  // Reseta e exibe a barra de progresso
+  exportBtn.disabled = true;
+  updateProgress(5, 'Extraindo conteúdo...');
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   try {
-    // Injeta a função de extração na página ativa
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: extractSanitizedPageContent
     });
 
     if (!result || !result.html.trim()) {
-      status.innerText = 'Erro: Conteúdo principal não encontrado.';
+      updateProgress(0, 'Erro: Conteúdo não encontrado.');
+      exportBtn.disabled = false;
       return;
     }
 
-    status.innerText = 'Baixando imagens e convertendo para Markdown...';
+    updateProgress(20, 'Tratando imagens...');
 
     const zip = new JSZip();
     const imagesFolder = zip.folder("images");
     let htmlContent = result.html;
 
-    // Redireciona os links das imagens para a pasta /images do ZIP
     for (const img of result.images) {
       imagesFolder.file(img.filename, img.data, { base64: true });
       const escapedUrl = escapeRegExp(img.originalSrc);
@@ -30,87 +33,67 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
       htmlContent = htmlContent.replace(regex, `images/${img.filename}`);
     }
 
-    // Instancia o conversor HTML -> Markdown
     const turndownService = new TurndownService({
       headingStyle: 'atx',
       codeBlockStyle: 'fenced',
       bulletListMarker: '-'
     });
 
-    // REGRA 1: Preserva e limpa as tags <details> e <summary>
+    // REGRAS DO TURNDOWN
     turndownService.addRule('detailsSummary', {
-      filter: function (node) {
-        return node.nodeName === 'DETAILS' || node.nodeName === 'SUMMARY';
-      },
-      replacement: function (content, node) {
+      filter: (node) => node.nodeName === 'DETAILS' || node.nodeName === 'SUMMARY',
+      replacement: (content, node) => {
         if (node.nodeName === 'DETAILS') {
           const isOpen = node.hasAttribute('open') ? ' open' : '';
           return `\n\n<details${isOpen}>\n${content.trim()}\n</details>\n\n`;
         }
         if (node.nodeName === 'SUMMARY') {
-          const cleanText = content.replace(/\*/g, '').trim();
-          return `<summary>${cleanText}</summary>\n\n`;
+          return `<summary>${content.replace(/\*/g, '').trim()}</summary>\n\n`;
         }
         return content;
       }
     });
 
-    // REGRA 2: Ajusta a largura máxima das imagens (400px)
     turndownService.addRule('compactImages', {
       filter: 'img',
-      replacement: function (content, node) {
+      replacement: (content, node) => {
         const src = node.getAttribute('src');
         const alt = node.getAttribute('alt') || 'imagem';
-        if (!src) return '';
-        return `\n\n<img src="${src}" alt="${alt}" width="400" />\n\n`;
+        return src ? `\n\n<img src="${src}" alt="${alt}" width="400" />\n\n` : '';
       }
     });
 
-    // REGRA 3: Converte elementos <pre data-lang="..."> em blocos de código com sintaxe
     turndownService.addRule('fencedCodeBlocks', {
-      filter: function (node) {
-        return node.nodeName === 'PRE';
-      },
-      replacement: function (content, node) {
+      filter: 'pre',
+      replacement: (content, node) => {
         const codeElement = node.querySelector('code') || node;
         const lang = node.getAttribute('data-lang') || codeElement.getAttribute('data-lang') || '';
-        
-        let text = codeElement.textContent || '';
-        text = text.replace(/\u200B/g, '').trim();
-
+        let text = (codeElement.textContent || '').replace(/\u200B/g, '').trim();
         return `\n\n\`\`\`${lang}\n${text}\n\`\`\`\n\n`;
       }
     });
 
     turndownService.addRule('tables', {
       filter: 'table',
-      replacement: function (content, node) {
+      replacement: (content, node) => {
         const rows = Array.from(node.querySelectorAll('tr'));
         if (rows.length === 0) return '';
-
         let markdownTable = '\n\n';
-
         rows.forEach((row, rowIndex) => {
           const cells = Array.from(row.querySelectorAll('th, td'));
           const cellTexts = cells.map(cell => cell.textContent.replace(/[\n\r]+/g, ' ').trim());
-
           markdownTable += '| ' + cellTexts.join(' | ') + ' |\n';
-
-          // Adiciona a linha divisória do cabeçalho Markdown após a primeira linha
           if (rowIndex === 0) {
-            const separator = cells.map(() => '---').join(' | ');
-            markdownTable += '| ' + separator + ' |\n';
+            markdownTable += '| ' + cells.map(() => '---').join(' | ') + ' |\n';
           }
         });
-
         return markdownTable + '\n\n';
       }
     });
 
-    // Executa a conversão base para Markdown
+    updateProgress(35, 'Convertendo para Markdown...');
     let baseMarkdown = turndownService.turndown(htmlContent);
 
-    // Garante que o Título H1 seja adicionado no topo do documento
     if (result.mainTitle) {
       const cleanTitle = result.mainTitle.replace(/[\n\r]+/g, ' ').trim();
       baseMarkdown = baseMarkdown.replace(new RegExp(`^#+\\s*${escapeRegExp(cleanTitle)}`, 'i'), '').trim();
@@ -118,35 +101,30 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
     }
 
     baseMarkdown = baseMarkdown.replace(/\n{3,}/g, '\n\n').trim();
-
     const pageUrl = result.originalUrl || tab.url;
-    const footer = `\n\n---\n\n> **Fonte original:** [${pageUrl}](${pageUrl})\n`;
-    
-    // Anexa o footer ao markdown base original
-    baseMarkdown += footer;
+    baseMarkdown += `\n\n---\n\n> **Fonte original:** [${pageUrl}](${pageUrl})\n`;
 
-    // --- LÓGICA DE DETECÇÃO DE IDIOMA E TRADUÇÃO ÚNICA ---
     const pageLang = (result.pageLang || 'en').toLowerCase();
     const isPortuguese = pageLang.startsWith('pt');
 
+    // Tradução com atualização de progresso dinâmico (35% -> 85%)
     if (isPortuguese) {
-      // O site original é PT-BR
       zip.file("documentation-pt.md", baseMarkdown);
-      
-      status.innerText = 'Traduzindo para Inglês (en)...';
-      const markdownEn = await translateMarkdownSafely(baseMarkdown, 'en');
+      const markdownEn = await translateMarkdownSafely(baseMarkdown, 'en', (p) => {
+        const currentProgress = 35 + Math.round(p * 0.5);
+        updateProgress(currentProgress, `Traduzindo (EN)... ${p}%`);
+      });
       zip.file("documentation-en.md", markdownEn);
     } else {
-      // O site original é EN (ou outro)
       zip.file("documentation-en.md", baseMarkdown);
-      
-      status.innerText = 'Traduzindo para Português (pt-br)...';
-      const markdownPt = await translateMarkdownSafely(baseMarkdown, 'pt');
+      const markdownPt = await translateMarkdownSafely(baseMarkdown, 'pt', (p) => {
+        const currentProgress = 35 + Math.round(p * 0.5);
+        updateProgress(currentProgress, `Traduzindo (PT-BR)... ${p}%`);
+      });
       zip.file("documentation-pt.md", markdownPt);
     }
 
-    status.innerText = 'Gerando arquivo .ZIP...';
-
+    updateProgress(90, 'Gerando arquivo .ZIP...');
     const zipBlob = await zip.generateAsync({ type: "blob" });
     const downloadUrl = URL.createObjectURL(zipBlob);
 
@@ -155,25 +133,39 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
     a.download = `${result.slug}.zip`;
     a.click();
 
-    status.innerText = 'Download concluído com sucesso!';
+    updateProgress(100, 'Concluído com sucesso!');
   } catch (err) {
     console.error(err);
     status.innerText = 'Erro: ' + err.message;
+  } finally {
+    exportBtn.disabled = false;
   }
 });
 
-// ====================================================================
-// SISTEMA DE TRADUÇÃO PROTEGIDA (Preserva Código, Tags HTML e Imagens)
-// ====================================================================
-async function translateMarkdownSafely(markdown, targetLang) {
+// Atualiza a Barra de Progresso no popup
+function updateProgress(percent, statusMessage) {
+  const container = document.getElementById('progressContainer');
+  const bar = document.getElementById('progressBar');
+  const text = document.getElementById('progressText');
+  const status = document.getElementById('status');
+
+  container.style.display = 'block';
+  text.style.display = 'block';
+
+  bar.style.width = `${percent}%`;
+  text.innerText = `${percent}%`;
+  status.innerText = statusMessage;
+}
+
+// TRADUÇÃO COM SUPORTE A PROGRESSO
+async function translateMarkdownSafely(markdown, targetLang, onProgress) {
   const placeholders = [];
-  
-const regexesToProtect = [
-    /```[\s\S]*?```/g,                        // Blocos de código Markdown
-    /<img[^>]+>/g,                            // Tags de imagem HTML
-    /<details[^>]*>[\s\S]*?<\/details>/g,     // Blocos HTML details
-    /!\[[^\]]*\]\([^)]+\)/g,                  // Imagens Markdown inline
-    /\|[^\n]+\|\n\|[\s:-|-]+\|\n(\|[^\n]+\|\n?)*/g // Tabelas em formato Markdown
+  const regexesToProtect = [
+    /```[\s\S]*?```/g,
+    /<img[^>]+>/g,
+    /<details[^>]*>[\s\S]*?<\/details>/g,
+    /!\[[^\]]*\]\([^)]+\)/g,
+    /\|[^\n]+\|\n\|[\s:-|-]+\|\n(\|[^\n]+\|\n?)*/g
   ];
 
   let protectedMarkdown = markdown;
@@ -185,13 +177,19 @@ const regexesToProtect = [
     });
   });
 
-  // Quebra por linhas em vez de grandes parágrafos
   const lines = protectedMarkdown.split('\n');
   const translatedLines = [];
   let textBatch = "";
+  
+  const totalLines = lines.length;
 
-  for (let line of lines) {
-    // Se for uma linha protegida ou vazia, traduz o acumulado e insere a linha intacta
+  for (let i = 0; i < totalLines; i++) {
+    const line = lines[i];
+
+    if (onProgress) {
+      onProgress(Math.round(((i + 1) / totalLines) * 100));
+    }
+
     if (!line.trim() || /^\[\[\[PROTECTED_BLOCK_\d+\]\]\]$/.test(line.trim())) {
       if (textBatch.trim()) {
         const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
@@ -202,7 +200,6 @@ const regexesToProtect = [
       continue;
     }
 
-    // Se o lote acumular mais de 1000 caracteres, envia para a API
     if ((textBatch + "\n" + line).length > 1000) {
       const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
       translatedLines.push(translatedBatch);
@@ -212,7 +209,6 @@ const regexesToProtect = [
     }
   }
 
-  // Traduz qualquer resto pendente
   if (textBatch.trim()) {
     const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
     translatedLines.push(translatedBatch);
@@ -220,7 +216,6 @@ const regexesToProtect = [
 
   let finalMarkdown = translatedLines.join('\n');
 
-  // Restaura os blocos protegidos intactos
   placeholders.forEach((originalText, index) => {
     const placeholder = `[[[PROTECTED_BLOCK_${index}]]]`;
     finalMarkdown = finalMarkdown.replace(placeholder, originalText);
@@ -229,28 +224,21 @@ const regexesToProtect = [
   return finalMarkdown;
 }
 
-// Consome a API do Google Translate via POST (suporta textos longos sem quebrar URL)
 async function callGoogleTranslateAPI(text, targetLang) {
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t`;
+  if (!text || !text.trim()) return text;
+  const encodedText = encodeURIComponent(text);
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodedText}`;
   
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({ q: text })
-    });
-
-    if (!response.ok) throw new Error('Falha na resposta da API');
-    
+    const response = await fetch(url);
+    if (!response.ok) return text;
     const data = await response.json();
-    if (!data || !data[0]) return text;
-
-    return data[0].map(item => item[0]).join('');
+    if (data && data[0] && Array.isArray(data[0])) {
+      return data[0].map(item => (item && item[0]) ? item[0] : '').join('');
+    }
+    return text;
   } catch (e) {
-    console.warn("Falha na chamada da API, mantendo texto original:", e);
-    return text; // Em caso de falha de conexão, retorna o texto sem quebrar o ZIP
+    return text;
   }
 }
 
@@ -258,12 +246,9 @@ function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// ====================================================================
-// FUNÇÃO INJETADA QUE RODA NA PÁGINA DENTRO DO CHROMIUM
-// ====================================================================
 async function extractSanitizedPageContent() {
   const originalUrl = window.location.href;
-  const pageLang = document.documentElement.lang || 'en'; // Captura o idioma do HTML
+  const pageLang = document.documentElement.lang || 'en';
 
   const h1 = document.querySelector('h1') || 
              document.querySelector('.ArticleHeader_article-title__futDC') || 
@@ -364,12 +349,7 @@ async function extractSanitizedPageContent() {
     const img = imgElements[i];
     const src = img.src || img.getAttribute('data-src');
 
-    if (!src || src.startsWith('data:')) {
-      img.remove();
-      continue;
-    }
-
-    if (seenImageSrcs.has(src)) {
+    if (!src || src.startsWith('data:') || seenImageSrcs.has(src)) {
       img.remove();
       continue;
     }
@@ -427,6 +407,6 @@ async function extractSanitizedPageContent() {
     images: images,
     slug: slug,
     originalUrl: originalUrl,
-    pageLang: pageLang // Retornando o idioma detectado
+    pageLang: pageLang
   };
 }
