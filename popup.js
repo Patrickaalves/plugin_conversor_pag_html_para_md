@@ -37,7 +37,7 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
       bulletListMarker: '-'
     });
 
-    // REGRA 1: Preserva e limpa as tags <details> e <summary> (Blocos expansíveis sem **)
+    // REGRA 1: Preserva e limpa as tags <details> e <summary>
     turndownService.addRule('detailsSummary', {
       filter: function (node) {
         return node.nodeName === 'DETAILS' || node.nodeName === 'SUMMARY';
@@ -82,26 +82,43 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
       }
     });
 
-    // Executa a conversão para Markdown
-    let markdown = turndownService.turndown(htmlContent);
+    // Executa a conversão base para Markdown
+    let baseMarkdown = turndownService.turndown(htmlContent);
 
     // Garante que o Título H1 seja adicionado no topo do documento
     if (result.mainTitle) {
       const cleanTitle = result.mainTitle.replace(/[\n\r]+/g, ' ').trim();
-      markdown = markdown.replace(new RegExp(`^#+\\s*${escapeRegExp(cleanTitle)}`, 'i'), '').trim();
-      markdown = `# ${cleanTitle}\n\n` + markdown;
+      baseMarkdown = baseMarkdown.replace(new RegExp(`^#+\\s*${escapeRegExp(cleanTitle)}`, 'i'), '').trim();
+      baseMarkdown = `# ${cleanTitle}\n\n` + baseMarkdown;
     }
 
-    // Limpeza de linhas em branco consecutivas
-    markdown = markdown
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+    baseMarkdown = baseMarkdown.replace(/\n{3,}/g, '\n\n').trim();
 
-    // ADICIONA O LINK DA PÁGINA ORIGINAL NO FINAL DO ARQUIVO
     const pageUrl = result.originalUrl || tab.url;
-    markdown += `\n\n---\n\n> **Fonte original:** [${pageUrl}](${pageUrl})\n`;
+    const footer = `\n\n---\n\n> **Fonte original:** [${pageUrl}](${pageUrl})\n`;
+    
+    // Anexa o footer ao markdown base original
+    baseMarkdown += footer;
 
-    zip.file("documentation.md", markdown);
+    // --- LÓGICA DE DETECÇÃO DE IDIOMA E TRADUÇÃO ÚNICA ---
+    const pageLang = (result.pageLang || 'en').toLowerCase();
+    const isPortuguese = pageLang.startsWith('pt');
+
+    if (isPortuguese) {
+      // O site original é PT-BR
+      zip.file("documentation-pt.md", baseMarkdown);
+      
+      status.innerText = 'Traduzindo para Inglês (en)...';
+      const markdownEn = await translateMarkdownSafely(baseMarkdown, 'en');
+      zip.file("documentation-en.md", markdownEn);
+    } else {
+      // O site original é EN (ou outro)
+      zip.file("documentation-en.md", baseMarkdown);
+      
+      status.innerText = 'Traduzindo para Português (pt-br)...';
+      const markdownPt = await translateMarkdownSafely(baseMarkdown, 'pt');
+      zip.file("documentation-pt.md", markdownPt);
+    }
 
     status.innerText = 'Gerando arquivo .ZIP...';
 
@@ -120,6 +137,97 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
   }
 });
 
+// ====================================================================
+// SISTEMA DE TRADUÇÃO PROTEGIDA (Preserva Código, Tags HTML e Imagens)
+// ====================================================================
+async function translateMarkdownSafely(markdown, targetLang) {
+  const placeholders = [];
+  
+  const regexesToProtect = [
+    /```[\s\S]*?```/g,                        // Blocos de código Markdown
+    /<img[^>]+>/g,                            // Tags de imagem HTML
+    /<details[^>]*>[\s\S]*?<\/details>/g,     // Blocos HTML details
+    /!\[[^\]]*\]\([^)]+\)/g                   // Imagens Markdown inline
+  ];
+
+  let protectedMarkdown = markdown;
+  regexesToProtect.forEach(regex => {
+    protectedMarkdown = protectedMarkdown.replace(regex, (match) => {
+      const placeholder = `[[[PROTECTED_BLOCK_${placeholders.length}]]]`;
+      placeholders.push(match);
+      return placeholder;
+    });
+  });
+
+  // Quebra por linhas em vez de grandes parágrafos
+  const lines = protectedMarkdown.split('\n');
+  const translatedLines = [];
+  let textBatch = "";
+
+  for (let line of lines) {
+    // Se for uma linha protegida ou vazia, traduz o acumulado e insere a linha intacta
+    if (!line.trim() || /^\[\[\[PROTECTED_BLOCK_\d+\]\]\]$/.test(line.trim())) {
+      if (textBatch.trim()) {
+        const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
+        translatedLines.push(translatedBatch);
+        textBatch = "";
+      }
+      translatedLines.push(line);
+      continue;
+    }
+
+    // Se o lote acumular mais de 1000 caracteres, envia para a API
+    if ((textBatch + "\n" + line).length > 1000) {
+      const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
+      translatedLines.push(translatedBatch);
+      textBatch = line;
+    } else {
+      textBatch = textBatch ? textBatch + "\n" + line : line;
+    }
+  }
+
+  // Traduz qualquer resto pendente
+  if (textBatch.trim()) {
+    const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
+    translatedLines.push(translatedBatch);
+  }
+
+  let finalMarkdown = translatedLines.join('\n');
+
+  // Restaura os blocos protegidos intactos
+  placeholders.forEach((originalText, index) => {
+    const placeholder = `[[[PROTECTED_BLOCK_${index}]]]`;
+    finalMarkdown = finalMarkdown.replace(placeholder, originalText);
+  });
+
+  return finalMarkdown;
+}
+
+// Consome a API do Google Translate via POST (suporta textos longos sem quebrar URL)
+async function callGoogleTranslateAPI(text, targetLang) {
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t`;
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({ q: text })
+    });
+
+    if (!response.ok) throw new Error('Falha na resposta da API');
+    
+    const data = await response.json();
+    if (!data || !data[0]) return text;
+
+    return data[0].map(item => item[0]).join('');
+  } catch (e) {
+    console.warn("Falha na chamada da API, mantendo texto original:", e);
+    return text; // Em caso de falha de conexão, retorna o texto sem quebrar o ZIP
+  }
+}
+
 function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -128,16 +236,14 @@ function escapeRegExp(string) {
 // FUNÇÃO INJETADA QUE RODA NA PÁGINA DENTRO DO CHROMIUM
 // ====================================================================
 async function extractSanitizedPageContent() {
-  // Captura a URL original da aba
   const originalUrl = window.location.href;
+  const pageLang = document.documentElement.lang || 'en'; // Captura o idioma do HTML
 
-  // 1. CAPTURA O TÍTULO PRINCIPAL
   const h1 = document.querySelector('h1') || 
              document.querySelector('.ArticleHeader_article-title__futDC') || 
              document.querySelector('.entry-title');
   const mainTitle = h1 ? h1.innerText : document.title;
 
-  // 2. SELECIONA A ÁREA DE CONTEÚDO PRINCIPAL
   const contentSelectors = [
     '.MainArticleContent_articleMainContentCss__b_1_R',
     'article',
@@ -157,10 +263,8 @@ async function extractSanitizedPageContent() {
   }
 
   if (!mainContainer) mainContainer = document.body;
-
   const clone = mainContainer.cloneNode(true);
 
-  // 3. DESESTRUTURAÇÃO ESPECIAL DE ABAS DE CÓDIGO DO GFG (<gfg-tabs>)
   const gfgTabs = clone.querySelectorAll('gfg-tabs, .code-container, .responsive-tabs');
   
   gfgTabs.forEach(tabsContainer => {
@@ -185,10 +289,7 @@ async function extractSanitizedPageContent() {
 
         if (codeText && codeText.trim()) {
           const details = document.createElement('details');
-          
-          if (idx === 0) {
-            details.setAttribute('open', '');
-          }
+          if (idx === 0) details.setAttribute('open', '');
 
           const summary = document.createElement('summary');
           summary.textContent = tabName || lang.toUpperCase();
@@ -201,21 +302,17 @@ async function extractSanitizedPageContent() {
           newCode.textContent = codeText.trim();
 
           newPre.appendChild(newCode);
-
           details.appendChild(summary);
           details.appendChild(newPre);
-
           wrapper.appendChild(details);
         }
       });
-
       if (tabsContainer.parentNode) {
         tabsContainer.parentNode.replaceChild(wrapper, tabsContainer);
       }
     }
   });
 
-  // 4. LIMPEZA DE LIXO E ELEMENTOS DE INTERFACE
   const junkSelectors = [
     'header', 'footer', 'nav', 'aside',
     '.gfg-header', '.navigation-bar', '.sidebar',
@@ -231,10 +328,8 @@ async function extractSanitizedPageContent() {
     clone.querySelectorAll(selector).forEach(el => el.remove());
   });
 
-  // Remove imagens duplicadas de background do carrossel
   clone.querySelectorAll('img.bg, .gfg-preview-carousel-img.bg, img[class*="bg"]').forEach(el => el.remove());
 
-  // 5. DEDUPLICAÇÃO E TRATAMENTO DE IMAGENS
   const imgElements = Array.from(clone.querySelectorAll('img'));
   const images = [];
   const seenImageSrcs = new Set();
@@ -305,6 +400,7 @@ async function extractSanitizedPageContent() {
     html: clone.innerHTML,
     images: images,
     slug: slug,
-    originalUrl: originalUrl
+    originalUrl: originalUrl,
+    pageLang: pageLang // Retornando o idioma detectado
   };
 }

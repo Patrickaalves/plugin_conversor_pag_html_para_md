@@ -8,6 +8,11 @@
     "scripting"
   ],
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "permissions": [
+      "https://translate.googleapis.com/*",
+      "http://*/*",
+      "https://*/*"
+    ]
   }
 }
