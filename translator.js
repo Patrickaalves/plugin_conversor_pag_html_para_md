@@ -206,18 +206,45 @@ async function callDockerTranslateAPI(textArray, targetLang) {
   throw new Error(`Docker inacessível: ${lastError?.message}`);
 }
 
-// SANITIZADOR DE MARKDOWN
+// --------------------------------------------------------------------
+// SANITIZADOR: Corrige negritos colados, espaços internos e títulos
+// --------------------------------------------------------------------
 function cleanTranslatedMarkdown(text) {
   if (!text) return text;
 
   let cleaned = text;
 
+  // 1. Reduz sequências de 3 ou mais asteriscos para 2 (ex: ****texto**** -> **texto**)
   cleaned = cleaned.replace(/\*{3,}/g, '**');
-  cleaned = cleaned.replace(/\*\*\s+([^\*]+?)\s+\*\*/g, ' **$1** ');
-  cleaned = cleaned.replace(/([a-zA-Z0-9à-úÀ-ÚÀ-ÿ])\*\*/g, '$1 **');
-  cleaned = cleaned.replace(/\*\*([a-zA-Z0-9à-úÀ-ÚÀ-ÿ])/g, '** $1');
-  cleaned = cleaned.replace(/^(\s*-)\s*(\*\*|\w)/gm, '$1 $2');
-  cleaned = cleaned.replace(/(\*\*:)(?=[a-zA-Z0-9à-úÀ-ÚÀ-ÿ])/g, '$1 ');
+
+  // 2. TRATAMENTO ATÔMICO DE NEGRITO:
+  // Remove espaços internos E ajusta espaçamento externo de uma só vez
+  cleaned = cleaned.replace(/(\S)?\s*\*\*([^*]+?)\*\*\s*(\S)?/g, (match, before, inner, after) => {
+    const trimmedInner = inner.trim();
+    if (!trimmedInner) return '';
+
+    let result = `**${trimmedInner}**`;
+
+    // Se tinha uma palavra colada antes, adiciona espaço
+    if (before) {
+      result = `${before} ${result}`;
+    }
+    // Se tinha uma palavra colada depois, adiciona espaço
+    if (after) {
+      result = `${result} ${after}`;
+    }
+
+    return result;
+  });
+
+  // 3. Ajusta pontuações coladas após o negrito (ex: "**Scanner** :" -> "**Scanner**:")
+  cleaned = cleaned.replace(/\*\*\s+([.,;:!?\)])/g, '**$1');
+  cleaned = cleaned.replace(/([\(\[\{])\s+\*\*/g, '$1**');
+
+  // 4. Corrige marcadores de listas (- **item**)
+  cleaned = cleaned.replace(/^(\s*[\-\*])\s*(\*\*|\w)/gm, '$1 $2');
+
+  // 5. Corrige títulos Markdown espaçados pela IA (ex: "# # #" -> "###")
   cleaned = cleaned
     .replace(/^#\s+#\s+#/gm, '###')
     .replace(/^#\s+#/gm, '##')
