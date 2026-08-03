@@ -1,4 +1,4 @@
-// translator.js - Tradução Resiliente com Validação de Falha Crítica
+// translator.js - Tradução Resiliente com Preservação de Blockquotes (>)
 
 async function translateMarkdownSafely(markdown, targetLang, onProgress, preferredService = 'google') {
   const map = new Map();
@@ -71,18 +71,26 @@ async function translateMarkdownSafely(markdown, targetLang, onProgress, preferr
       onProgress(Math.round(((b + 1) / (totalBatches || 1)) * 100));
     }
 
-    // Tenta a tradução. Se ambos os provedores falharem, retorna null
     const translatedArray = await translateWithFallback(batchTexts, targetLang, preferredService);
 
     if (!translatedArray) {
       console.error(`❌ Falha crítica na tradução do lote ${b + 1}. Ambos os provedores falharam!`);
       hasTranslationFailed = true;
-      break; // Aborta a tradução imediatamente
+      break;
     }
 
     batchIndexes.forEach((chunkIdx, i) => {
       if (translatedArray[i] && typeof translatedArray[i] === 'string') {
-        structuredChunks[chunkIdx].text = cleanTranslatedMarkdown(translatedArray[i]);
+        const originalText = structuredChunks[chunkIdx].text.trim();
+        let cleanedText = cleanTranslatedMarkdown(translatedArray[i]);
+
+        // PRESERVAÇÃO DE BLOCKQUOTE (>):
+        // Se o bloco original começava com '>', garante que a tradução mantenha o '>'
+        if (originalText.startsWith('>')) {
+          cleanedText = cleanedText.replace(/^[\*\-\>\s]+/, '> ');
+        }
+
+        structuredChunks[chunkIdx].text = cleanedText;
       }
     });
 
@@ -91,7 +99,6 @@ async function translateMarkdownSafely(markdown, targetLang, onProgress, preferr
     }
   }
 
-  // Se a tradução falhou completamente, retorna null em vez do texto não traduzido
   if (hasTranslationFailed) {
     return null;
   }
@@ -112,7 +119,6 @@ async function translateWithFallback(textArray, targetLang, preferredService = '
   const primary = preferredService === 'docker' ? 'docker' : 'google';
   const fallback = primary === 'docker' ? 'google' : 'docker';
 
-  // 1. TENTATIVA COM O PROVEDOR PREFERENCIAL
   try {
     const result = (primary === 'docker')
       ? await callDockerTranslateAPI(textArray, targetLang)
@@ -125,7 +131,6 @@ async function translateWithFallback(textArray, targetLang, preferredService = '
     console.warn(`⚠️ Provedor preferencial [${primary}] falhou: ${errPrimary.message}. Tentando fallback [${fallback}]...`);
   }
 
-  // 2. TENTATIVA COM O SEGUNDO PROVEDOR (FALLBACK)
   try {
     const fallbackResult = (fallback === 'docker')
       ? await callDockerTranslateAPI(textArray, targetLang)
@@ -139,7 +144,6 @@ async function translateWithFallback(textArray, targetLang, preferredService = '
     console.error(`❌ Ambos os provedores ([${primary}] e [${fallback}]) falharam:`, errFallback.message);
   }
 
-  // RETORNA NULL SE NENHUM DOS DOIS PROVEDORES FUNCIONAR
   return null;
 }
 
@@ -206,45 +210,35 @@ async function callDockerTranslateAPI(textArray, targetLang) {
   throw new Error(`Docker inacessível: ${lastError?.message}`);
 }
 
-// --------------------------------------------------------------------
-// SANITIZADOR: Corrige negritos colados, espaços internos e títulos
-// --------------------------------------------------------------------
+// SANITIZADOR DE MARKDOWN
 function cleanTranslatedMarkdown(text) {
   if (!text) return text;
 
   let cleaned = text;
 
-  // 1. Reduz sequências de 3 ou mais asteriscos para 2 (ex: ****texto**** -> **texto**)
+  // 1. Reduz sequências de 3 ou mais asteriscos para 2
   cleaned = cleaned.replace(/\*{3,}/g, '**');
 
-  // 2. TRATAMENTO ATÔMICO DE NEGRITO:
-  // Remove espaços internos E ajusta espaçamento externo de uma só vez
+  // 2. Tratamento atômico de negrito (limpa espaços internos e ajusta externos)
   cleaned = cleaned.replace(/(\S)?\s*\*\*([^*]+?)\*\*\s*(\S)?/g, (match, before, inner, after) => {
     const trimmedInner = inner.trim();
     if (!trimmedInner) return '';
 
     let result = `**${trimmedInner}**`;
-
-    // Se tinha uma palavra colada antes, adiciona espaço
-    if (before) {
-      result = `${before} ${result}`;
-    }
-    // Se tinha uma palavra colada depois, adiciona espaço
-    if (after) {
-      result = `${result} ${after}`;
-    }
+    if (before) result = `${before} ${result}`;
+    if (after) result = `${result} ${after}`;
 
     return result;
   });
 
-  // 3. Ajusta pontuações coladas após o negrito (ex: "**Scanner** :" -> "**Scanner**:")
+  // 3. Ajusta pontuações coladas após negrito
   cleaned = cleaned.replace(/\*\*\s+([.,;:!?\)])/g, '**$1');
   cleaned = cleaned.replace(/([\(\[\{])\s+\*\*/g, '$1**');
 
   // 4. Corrige marcadores de listas (- **item**)
   cleaned = cleaned.replace(/^(\s*[\-\*])\s*(\*\*|\w)/gm, '$1 $2');
 
-  // 5. Corrige títulos Markdown espaçados pela IA (ex: "# # #" -> "###")
+  // 5. Corrige títulos Markdown espaçados pela IA
   cleaned = cleaned
     .replace(/^#\s+#\s+#/gm, '###')
     .replace(/^#\s+#/gm, '##')
