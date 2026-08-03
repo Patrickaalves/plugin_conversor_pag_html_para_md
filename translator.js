@@ -1,4 +1,4 @@
-// translator.js - Tradução Resiliente com Preservação de Blockquotes (>)
+// translator.js - Tradução Resiliente (Fix para Headings e Blockquotes)
 
 async function translateMarkdownSafely(markdown, targetLang, onProgress, preferredService = 'google') {
   const map = new Map();
@@ -84,10 +84,20 @@ async function translateMarkdownSafely(markdown, targetLang, onProgress, preferr
         const originalText = structuredChunks[chunkIdx].text.trim();
         let cleanedText = cleanTranslatedMarkdown(translatedArray[i]);
 
-        // PRESERVAÇÃO DE BLOCKQUOTE (>):
-        // Se o bloco original começava com '>', garante que a tradução mantenha o '>'
+        // 1. PRESERVAÇÃO RIGOROSA DE TÍTULOS (#, ##, ###, ####, etc.)
+        const headingMatch = originalText.match(/^(#{1,6})\s+/);
+        if (headingMatch) {
+          const originalHashes = headingMatch[1];
+          // Limpa qualquer tralha (#) ou espaço residual no início da tradução
+          cleanedText = cleanedText.replace(/^[\s#]+/, '');
+          cleanedText = `${originalHashes} ${cleanedText}`;
+        }
+
+        // 2. PRESERVAÇÃO DE BLOCKQUOTE (>) SEM DESTRUIR NEGRITO
         if (originalText.startsWith('>')) {
-          cleanedText = cleanedText.replace(/^[\*\-\>\s]+/, '> ');
+          // Remove apenas caracteres '>' e espaços do início, mantendo os '**' intactos
+          cleanedText = cleanedText.replace(/^[\>\s]+/, '');
+          cleanedText = `> ${cleanedText}`;
         }
 
         structuredChunks[chunkIdx].text = cleanedText;
@@ -234,15 +244,8 @@ function cleanTranslatedMarkdown(text) {
   // 3. Ajusta pontuações coladas após negrito
   cleaned = cleaned.replace(/\*\*\s+([.,;:!?\)])/g, '**$1');
   cleaned = cleaned.replace(/([\(\[\{])\s+\*\*/g, '$1**');
-
   // 4. Corrige marcadores de listas (- **item**)
   cleaned = cleaned.replace(/^(\s*[\-\*])\s*(\*\*|\w)/gm, '$1 $2');
-
-  // 5. Corrige títulos Markdown espaçados pela IA
-  cleaned = cleaned
-    .replace(/^#\s+#\s+#/gm, '###')
-    .replace(/^#\s+#/gm, '##')
-    .replace(/^#\s+/gm, '# ');
 
   return cleaned.replace(/ {2,}/g, ' ').trim();
 }
