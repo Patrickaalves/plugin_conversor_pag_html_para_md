@@ -1,18 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Web Doc to Markdown Exporter",
-  "version": "1.0",
-  "description": "Exporta a página atual para Markdown (.md) baixando imagens para uma pasta local.",
+  "version": "1.1",
+  "description": "Exporta páginas web para Markdown (.md) em arquivo .ZIP",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "downloads",
+    "storage"
   ],
+  "host_permissions": [
+    "https://translate.googleapis.com/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
-    "default_popup": "popup.html",
-    "permissions": [
-      "https://translate.googleapis.com/*",
-      "http://*/*",
-      "https://*/*"
-    ]
+    "default_popup": "popup.html"
   }
 }

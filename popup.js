@@ -1,8 +1,33 @@
+document.addEventListener('DOMContentLoaded', () => {
+  const toggle = document.getElementById('translateToggle');
+
+  // Carrega a preferência salva no storage (padrão: true)
+  chrome.storage.local.get(['translateEnabled'], (data) => {
+    if (data.translateEnabled !== undefined) {
+      toggle.checked = data.translateEnabled;
+    }
+  });
+
+  // Salva a alteração do toggle no storage
+  toggle.addEventListener('change', () => {
+    chrome.storage.local.set({ translateEnabled: toggle.checked });
+  });
+});
+
+// Listener para receber as atualizações de progresso do background
+chrome.runtime.onMessage.addListener((request) => {
+  if (request.action === 'updateProgressUI') {
+    updateProgress(request.percent, request.statusMessage);
+    if (request.percent === 100) {
+      document.getElementById('exportBtn').disabled = false;
+    }
+  }
+});
+
 document.getElementById('exportBtn').addEventListener('click', async () => {
   const exportBtn = document.getElementById('exportBtn');
-  const status = document.getElementById('status');
+  const translateToggle = document.getElementById('translateToggle');
   
-  // Reseta e exibe a barra de progresso
   exportBtn.disabled = true;
   updateProgress(5, 'Extraindo conteúdo...');
 
@@ -20,14 +45,10 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
       return;
     }
 
-    updateProgress(20, 'Tratando imagens...');
+    updateProgress(15, 'Tratando imagens...');
 
-    const zip = new JSZip();
-    const imagesFolder = zip.folder("images");
     let htmlContent = result.html;
-
     for (const img of result.images) {
-      imagesFolder.file(img.filename, img.data, { base64: true });
       const escapedUrl = escapeRegExp(img.originalSrc);
       const regex = new RegExp(escapedUrl, 'g');
       htmlContent = htmlContent.replace(regex, `images/${img.filename}`);
@@ -39,7 +60,6 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
       bulletListMarker: '-'
     });
 
-    // REGRAS DO TURNDOWN
     turndownService.addRule('detailsSummary', {
       filter: (node) => node.nodeName === 'DETAILS' || node.nodeName === 'SUMMARY',
       replacement: (content, node) => {
@@ -91,7 +111,7 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
       }
     });
 
-    updateProgress(35, 'Convertendo para Markdown...');
+    updateProgress(30, 'Convertendo para Markdown...');
     let baseMarkdown = turndownService.turndown(htmlContent);
 
     if (result.mainTitle) {
@@ -104,142 +124,37 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
     const pageUrl = result.originalUrl || tab.url;
     baseMarkdown += `\n\n---\n\n> **Fonte original:** [${pageUrl}](${pageUrl})\n`;
 
-    const pageLang = (result.pageLang || 'en').toLowerCase();
-    const isPortuguese = pageLang.startsWith('pt');
+    // Envia os dados para o background.js iniciar a tarefa pesada de tradução e download
+    chrome.runtime.sendMessage({
+      action: 'startBackgroundExport',
+      payload: {
+        baseMarkdown: baseMarkdown,
+        images: result.images,
+        slug: result.slug,
+        pageLang: result.pageLang,
+        translateEnabled: translateToggle.checked
+      }
+    });
 
-    // Tradução com atualização de progresso dinâmico (35% -> 85%)
-    if (isPortuguese) {
-      zip.file("documentation-pt.md", baseMarkdown);
-      const markdownEn = await translateMarkdownSafely(baseMarkdown, 'en', (p) => {
-        const currentProgress = 35 + Math.round(p * 0.5);
-        updateProgress(currentProgress, `Traduzindo (EN)... ${p}%`);
-      });
-      zip.file("documentation-en.md", markdownEn);
-    } else {
-      zip.file("documentation-en.md", baseMarkdown);
-      const markdownPt = await translateMarkdownSafely(baseMarkdown, 'pt', (p) => {
-        const currentProgress = 35 + Math.round(p * 0.5);
-        updateProgress(currentProgress, `Traduzindo (PT-BR)... ${p}%`);
-      });
-      zip.file("documentation-pt.md", markdownPt);
-    }
-
-    updateProgress(90, 'Gerando arquivo .ZIP...');
-    const zipBlob = await zip.generateAsync({ type: "blob" });
-    const downloadUrl = URL.createObjectURL(zipBlob);
-
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = `${result.slug}.zip`;
-    a.click();
-
-    updateProgress(100, 'Concluído com sucesso!');
   } catch (err) {
     console.error(err);
-    status.innerText = 'Erro: ' + err.message;
-  } finally {
+    updateProgress(0, 'Erro: ' + err.message);
     exportBtn.disabled = false;
   }
 });
 
-// Atualiza a Barra de Progresso no popup
 function updateProgress(percent, statusMessage) {
   const container = document.getElementById('progressContainer');
   const bar = document.getElementById('progressBar');
   const text = document.getElementById('progressText');
   const status = document.getElementById('status');
 
-  container.style.display = 'block';
-  text.style.display = 'block';
+  if (container) container.style.display = 'block';
+  if (text) text.style.display = 'block';
 
-  bar.style.width = `${percent}%`;
-  text.innerText = `${percent}%`;
-  status.innerText = statusMessage;
-}
-
-// TRADUÇÃO COM SUPORTE A PROGRESSO
-async function translateMarkdownSafely(markdown, targetLang, onProgress) {
-  const placeholders = [];
-  const regexesToProtect = [
-    /```[\s\S]*?```/g,
-    /<img[^>]+>/g,
-    /<details[^>]*>[\s\S]*?<\/details>/g,
-    /!\[[^\]]*\]\([^)]+\)/g,
-    /\|[^\n]+\|\n\|[\s:-|-]+\|\n(\|[^\n]+\|\n?)*/g
-  ];
-
-  let protectedMarkdown = markdown;
-  regexesToProtect.forEach(regex => {
-    protectedMarkdown = protectedMarkdown.replace(regex, (match) => {
-      const placeholder = `[[[PROTECTED_BLOCK_${placeholders.length}]]]`;
-      placeholders.push(match);
-      return placeholder;
-    });
-  });
-
-  const lines = protectedMarkdown.split('\n');
-  const translatedLines = [];
-  let textBatch = "";
-  
-  const totalLines = lines.length;
-
-  for (let i = 0; i < totalLines; i++) {
-    const line = lines[i];
-
-    if (onProgress) {
-      onProgress(Math.round(((i + 1) / totalLines) * 100));
-    }
-
-    if (!line.trim() || /^\[\[\[PROTECTED_BLOCK_\d+\]\]\]$/.test(line.trim())) {
-      if (textBatch.trim()) {
-        const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
-        translatedLines.push(translatedBatch);
-        textBatch = "";
-      }
-      translatedLines.push(line);
-      continue;
-    }
-
-    if ((textBatch + "\n" + line).length > 1000) {
-      const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
-      translatedLines.push(translatedBatch);
-      textBatch = line;
-    } else {
-      textBatch = textBatch ? textBatch + "\n" + line : line;
-    }
-  }
-
-  if (textBatch.trim()) {
-    const translatedBatch = await callGoogleTranslateAPI(textBatch, targetLang);
-    translatedLines.push(translatedBatch);
-  }
-
-  let finalMarkdown = translatedLines.join('\n');
-
-  placeholders.forEach((originalText, index) => {
-    const placeholder = `[[[PROTECTED_BLOCK_${index}]]]`;
-    finalMarkdown = finalMarkdown.replace(placeholder, originalText);
-  });
-
-  return finalMarkdown;
-}
-
-async function callGoogleTranslateAPI(text, targetLang) {
-  if (!text || !text.trim()) return text;
-  const encodedText = encodeURIComponent(text);
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodedText}`;
-  
-  try {
-    const response = await fetch(url);
-    if (!response.ok) return text;
-    const data = await response.json();
-    if (data && data[0] && Array.isArray(data[0])) {
-      return data[0].map(item => (item && item[0]) ? item[0] : '').join('');
-    }
-    return text;
-  } catch (e) {
-    return text;
-  }
+  if (bar) bar.style.width = `${percent}%`;
+  if (text) text.innerText = `${percent}%`;
+  if (status) status.innerText = statusMessage;
 }
 
 function escapeRegExp(string) {
@@ -276,12 +191,24 @@ async function extractSanitizedPageContent() {
   if (!mainContainer) mainContainer = document.body;
   const clone = mainContainer.cloneNode(true);
 
-  const gfgTabs = clone.querySelectorAll('gfg-tabs, .code-container, .responsive-tabs');
-  
-  gfgTabs.forEach(tabsContainer => {
+  const originalGfgTabs = mainContainer.querySelectorAll('gfg-tabs, .code-container, .responsive-tabs');
+  const clonedGfgTabs = clone.querySelectorAll('gfg-tabs, .code-container, .responsive-tabs');
+
+  originalGfgTabs.forEach((origTabsContainer, index) => {
+    const targetCloneContainer = clonedGfgTabs[index];
+    if (!targetCloneContainer) return;
+
+    let panels = Array.from(origTabsContainer.querySelectorAll('gfg-panel, [role="tabpanel"], .tab-panel'));
+    let tabs = Array.from(origTabsContainer.querySelectorAll('gfg-tab, [role="tab"], .tab-link'));
+
+    if (origTabsContainer.shadowRoot) {
+      const shadowPanels = Array.from(origTabsContainer.shadowRoot.querySelectorAll('gfg-panel, [role="tabpanel"], .tab-panel'));
+      const shadowTabs = Array.from(origTabsContainer.shadowRoot.querySelectorAll('gfg-tab, [role="tab"], .tab-link'));
+      if (shadowPanels.length > 0) panels = shadowPanels;
+      if (shadowTabs.length > 0) tabs = shadowTabs;
+    }
+
     const wrapper = document.createElement('div');
-    const panels = tabsContainer.querySelectorAll('gfg-panel, [role="tabpanel"], .tab-panel');
-    const tabs = tabsContainer.querySelectorAll('gfg-tab, [role="tab"], .tab-link');
 
     if (panels.length > 0) {
       panels.forEach((panel, idx) => {
@@ -303,7 +230,7 @@ async function extractSanitizedPageContent() {
           if (idx === 0) details.setAttribute('open', '');
 
           const summary = document.createElement('summary');
-          summary.textContent = tabName || lang.toUpperCase();
+          summary.textContent = tabName || lang.toUpperCase() || 'CÓDIGO';
 
           const newPre = document.createElement('pre');
           newPre.setAttribute('data-lang', lang);
@@ -318,8 +245,9 @@ async function extractSanitizedPageContent() {
           wrapper.appendChild(details);
         }
       });
-      if (tabsContainer.parentNode) {
-        tabsContainer.parentNode.replaceChild(wrapper, tabsContainer);
+
+      if (targetCloneContainer.parentNode) {
+        targetCloneContainer.parentNode.replaceChild(wrapper, targetCloneContainer);
       }
     }
   });

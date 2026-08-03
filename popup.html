@@ -17,6 +17,62 @@
       margin-bottom: 12px;
       color: #333;
     }
+    
+    /* Estilo da linha do Toggle */
+    .option-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      background: #fff;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #e2e2e2;
+    }
+    .option-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #444;
+    }
+    
+    /* Toggle Switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #ccc;
+      transition: .2s;
+      border-radius: 20px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .2s;
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: #007acc;
+    }
+    input:checked + .slider:before {
+      transform: translateX(16px);
+    }
+
     button {
       background: #007acc;
       color: white;
@@ -42,7 +98,6 @@
       color: #666;
       word-break: break-word;
     }
-    /* Estilos da Barra de Progresso */
     #progressContainer {
       display: none;
       margin-top: 12px;
@@ -51,7 +106,6 @@
       border-radius: 10px;
       height: 12px;
       overflow: hidden;
-      box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
     }
     #progressBar {
       width: 0%;
@@ -71,6 +125,15 @@
 </head>
 <body>
   <h3>Gerador de Documentação</h3>
+  
+  <div class="option-row">
+    <span class="option-label">Gerar tradução</span>
+    <label class="switch">
+      <input type="checkbox" id="translateToggle" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
   <button id="exportBtn">Exportar para .ZIP</button>
   
   <div id="progressContainer">
@@ -80,9 +143,7 @@
 
   <div id="status"></div>
 
-  <!-- Bibliotecas externas na pasta /lib -->
   <script src="lib/turndown.js"></script>
-  <script src="lib/jszip.min.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
